@@ -1,0 +1,194 @@
+//@version=5
+indicator("ICT Killzones + Liquidity Lines (stable, inline sessions)", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+showAsian  = input.bool(true, "Show Asian Killzone")
+showLondon = input.bool(true, "Show London Killzone")
+showNY     = input.bool(true, "Show New York Killzone")
+asianColor  = input.color(color.new(color.teal, 85), "Asian Color")
+londonColor = input.color(color.new(color.blue, 85), "London Color")
+nyColor     = input.color(color.new(color.orange, 85), "New York Color")
+untakenColor = input.color(color.new(color.lime, 0), "Untaken Line Color")
+takenColor   = input.color(color.new(color.red, 0), "Taken Line Color")
+textColor    = input.color(color.black, "Label Text Color")
+labelOffset  = input.int(5, "Label Offset (ticks)", minval=-50, maxval=50)
+
+asianStartH  = input.int(18, "Asian Start Hour (UTC)")
+asianStartM  = input.int(0, "Asian Start Minute (UTC)")
+asianEndH    = input.int(0, "Asian End Hour (UTC)")
+asianEndM    = input.int(0, "Asian End Minute (UTC)")
+londonStartH = input.int(2, "London Start Hour (UTC)")
+londonStartM = input.int(0, "London Start Minute (UTC)")
+londonEndH   = input.int(5, "London End Hour (UTC)")
+londonEndM   = input.int(0, "London End Minute (UTC)")
+nyStartH     = input.int(7, "NY Start Hour (UTC)")
+nyStartM     = input.int(0, "NY Start Minute (UTC)")
+nyEndH       = input.int(10, "NY End Hour (UTC)")
+nyEndM       = input.int(0, "NY End Minute (UTC)")
+
+utcMins() => hour(time, "UTC") * 60 + minute(time, "UTC")
+inSession(startH, startM, endH, endM) =>
+    s = startH * 60 + startM
+    e = endH * 60 + endM
+    now = utcMins()
+    s <= e ? (now >= s and now < e) : (now >= s or now < e)
+
+getDayName(t) =>
+    switch dayofweek(t)
+        dayofweek.monday => "Mon"
+        dayofweek.tuesday => "Tue"
+        dayofweek.wednesday => "Wed"
+        dayofweek.thursday => "Thu"
+        dayofweek.friday => "Fri"
+        => "Weekend"
+
+// --- Liquidity lines state
+var string prevDay = na
+var float dayHigh = na
+var float dayLow = na
+var int highBar = na
+var int lowBar = na
+var line[] highLines = array.new_line()
+var line[] lowLines  = array.new_line()
+var bool[] highBroken = array.new_bool()
+var bool[] lowBroken  = array.new_bool()
+var label[] highLabels = array.new_label()
+var label[] lowLabels  = array.new_label()
+
+currDay = getDayName(time)
+isNewDay = currDay != prevDay
+
+if na(prevDay)
+    prevDay := currDay
+    dayHigh := high
+    dayLow := low
+    highBar := bar_index
+    lowBar := bar_index
+
+if isNewDay
+    if not na(dayHigh)
+        lH = line.new(highBar, dayHigh, bar_index, dayHigh, xloc=xloc.bar_index, color=untakenColor, width=1)
+        lL = line.new(lowBar, dayLow,  bar_index, dayLow,  xloc=xloc.bar_index, color=untakenColor, width=1)
+        midH = math.floor((highBar + bar_index) / 2)
+        midL = math.floor((lowBar + bar_index) / 2)
+        labH = label.new(midH, dayHigh + labelOffset * syminfo.mintick, str.format("{0}-H", prevDay), xloc=xloc.bar_index, style=label.style_label_center, textcolor=textColor, color=color.new(color.white, 100), size=size.small)
+        labL = label.new(midL, dayLow  - labelOffset * syminfo.mintick, str.format("{0}-L", prevDay), xloc=xloc.bar_index, style=label.style_label_center, textcolor=textColor, color=color.new(color.white, 100), size=size.small)
+        array.push(highLines, lH)
+        array.push(lowLines, lL)
+        array.push(highBroken, false)
+        array.push(lowBroken, false)
+        array.push(highLabels, labH)
+        array.push(lowLabels, labL)
+    dayHigh := high
+    dayLow := low
+    highBar := bar_index
+    lowBar := bar_index
+    prevDay := currDay
+
+if high > dayHigh
+    dayHigh := high
+    highBar := bar_index
+if low < dayLow
+    dayLow := low
+    lowBar := bar_index
+
+// Update lines: extend until taken; reposition label center
+for i = 0 to array.size(highLines) - 1
+    l = array.get(highLines, i)
+    broken = array.get(highBroken, i)
+    lab = array.get(highLabels, i)
+    if not broken
+        if high >= line.get_y1(l)
+            line.set_color(l, takenColor)
+            array.set(highBroken, i, true)
+        line.set_x2(l, bar_index)
+        mid = math.floor((line.get_x1(l) + line.get_x2(l)) / 2)
+        label.set_x(lab, mid)
+
+for i = 0 to array.size(lowLines) - 1
+    l = array.get(lowLines, i)
+    broken = array.get(lowBroken, i)
+    lab = array.get(lowLabels, i)
+    if not broken
+        if low <= line.get_y1(l)
+            line.set_color(l, takenColor)
+            array.set(lowBroken, i, true)
+        line.set_x2(l, bar_index)
+        mid = math.floor((line.get_x1(l) + line.get_x2(l)) / 2)
+        label.set_x(lab, mid)
+
+// Ensure latest day exists
+if barstate.islast
+    if array.size(highLines) == 0 or label.get_text(array.get(highLabels, array.size(highLabels) - 1)) != currDay + "-H"
+        lH = line.new(highBar, dayHigh, bar_index, dayHigh, xloc=xloc.bar_index, color=untakenColor, width=1)
+        lL = line.new(lowBar, dayLow,  bar_index, dayLow,  xloc=xloc.bar_index, color=untakenColor, width=1)
+        midH = math.floor((highBar + bar_index) / 2)
+        midL = math.floor((lowBar + bar_index) / 2)
+        labH = label.new(midH, dayHigh + labelOffset * syminfo.mintick, str.format("{0}-H", currDay), xloc=xloc.bar_index, style=label.style_label_center, textcolor=textColor, color=color.new(color.white, 100), size=size.small)
+        labL = label.new(midL, dayLow  - labelOffset * syminfo.mintick, str.format("{0}-L", currDay), xloc=xloc.bar_index, style=label.style_label_center, textcolor=textColor, color=color.new(color.white, 100), size=size.small)
+        array.push(highLines, lH)
+        array.push(lowLines, lL)
+        array.push(highBroken, false)
+        array.push(lowBroken, false)
+        array.push(highLabels, labH)
+        array.push(lowLabels, labL)
+
+// --- Killzone persistent state (declare once)
+var float kzAHigh = na
+var float kzALow  = na
+var int   kzAStart = na
+var box   kzABox   = na
+
+var float kzLHigh = na
+var float kzLLow  = na
+var int   kzLStart = na
+var box   kzLBox   = na
+
+var float kzNHigh = na
+var float kzNLow  = na
+var int   kzNStart = na
+var box   kzNBox   = na
+
+// --- Session flags
+inAsian  = showAsian  and inSession(asianStartH, asianStartM, asianEndH, asianEndM)
+inLondon = showLondon and inSession(londonStartH, londonStartM, londonEndH, londonEndM)
+inNY     = showNY and inSession(nyStartH, nyStartM, nyEndH, nyEndM)
+
+// --- Asian session inline handling
+if inAsian
+    kzAHigh := na(kzAHigh) ? high : math.max(kzAHigh, high)
+    kzALow  := na(kzALow)  ? low  : math.min(kzALow, low)
+    kzAStart := na(kzAStart) ? bar_index : kzAStart
+else
+    if not na(kzAStart)
+        // close and draw the box from kzAStart .. current bar_index
+        if not na(kzAHigh) and not na(kzALow)
+            kzABox := box.new(kzAStart, kzAHigh, bar_index, kzALow, xloc=xloc.bar_index, bgcolor=asianColor, border_color=color.new(color.black, 80))
+        kzAHigh := na
+        kzALow := na
+        kzAStart := na
+
+// --- London session inline handling
+if inLondon
+    kzLHigh := na(kzLHigh) ? high : math.max(kzLHigh, high)
+    kzLLow  := na(kzLLow)  ? low  : math.min(kzLLow, low)
+    kzLStart := na(kzLStart) ? bar_index : kzLStart
+else
+    if not na(kzLStart)
+        if not na(kzLHigh) and not na(kzLLow)
+            kzLBox := box.new(kzLStart, kzLHigh, bar_index, kzLLow, xloc=xloc.bar_index, bgcolor=londonColor, border_color=color.new(color.black, 80))
+        kzLHigh := na
+        kzLLow := na
+        kzLStart := na
+
+// --- NY session inline handling
+if inNY
+    kzNHigh := na(kzNHigh) ? high : math.max(kzNHigh, high)
+    kzNLow  := na(kzNLow)  ? low  : math.min(kzNLow, low)
+    kzNStart := na(kzNStart) ? bar_index : kzNStart
+else
+    if not na(kzNStart)
+        if not na(kzNHigh) and not na(kzNLow)
+            kzNBox := box.new(kzNStart, kzNHigh, bar_index, kzNLow, xloc=xloc.bar_index, bgcolor=nyColor, border_color=color.new(color.black, 80))
+        kzNHigh := na
+        kzNLow := na
+        kzNStart := na
