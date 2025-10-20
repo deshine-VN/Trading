@@ -1,6 +1,7 @@
 //@version=5
-indicator("ICT Killzones + Liquidity Lines (stable, inline sessions)", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+indicator("ICT Killzones + Liquidity Lines (buffer-safe)", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
+// ===== Inputs =====
 showAsian  = input.bool(true, "Show Asian Killzone")
 showLondon = input.bool(true, "Show London Killzone")
 showNY     = input.bool(true, "Show New York Killzone")
@@ -12,19 +13,21 @@ takenColor   = input.color(color.new(color.red, 0), "Taken Line Color")
 textColor    = input.color(color.black, "Label Text Color")
 labelOffset  = input.int(5, "Label Offset (ticks)", minval=-50, maxval=50)
 
-asianStartH  = input.int(18, "Asian Start Hour (UTC)")
-asianStartM  = input.int(0, "Asian Start Minute (UTC)")
-asianEndH    = input.int(0, "Asian End Hour (UTC)")
-asianEndM    = input.int(0, "Asian End Minute (UTC)")
-londonStartH = input.int(2, "London Start Hour (UTC)")
-londonStartM = input.int(0, "London Start Minute (UTC)")
-londonEndH   = input.int(5, "London End Hour (UTC)")
-londonEndM   = input.int(0, "London End Minute (UTC)")
-nyStartH     = input.int(7, "NY Start Hour (UTC)")
-nyStartM     = input.int(0, "NY Start Minute (UTC)")
-nyEndH       = input.int(10, "NY End Hour (UTC)")
-nyEndM       = input.int(0, "NY End Minute (UTC)")
+// ===== Killzone Times (UTC) =====
+asianStartH  = input.int(18)
+asianStartM  = input.int(0)
+asianEndH    = input.int(0)
+asianEndM    = input.int(0)
+londonStartH = input.int(2)
+londonStartM = input.int(0)
+londonEndH   = input.int(5)
+londonEndM   = input.int(0)
+nyStartH     = input.int(7)
+nyStartM     = input.int(0)
+nyEndH       = input.int(10)
+nyEndM       = input.int(0)
 
+// ===== Helper functions =====
 utcMins() => hour(time, "UTC") * 60 + minute(time, "UTC")
 inSession(startH, startM, endH, endM) =>
     s = startH * 60 + startM
@@ -41,7 +44,7 @@ getDayName(t) =>
         dayofweek.friday => "Fri"
         => "Weekend"
 
-// --- Liquidity lines state
+// --- Day State ---
 var string prevDay = na
 var float dayHigh = na
 var float dayLow = na
@@ -64,20 +67,27 @@ if na(prevDay)
     highBar := bar_index
     lowBar := bar_index
 
+createDayObjects(_day, _highBar, _high, _lowBar, _low) =>
+    safeX2 = math.min(bar_index, last_bar_index)
+    lH = line.new(_highBar, _high, safeX2, _high, xloc=xloc.bar_index, color=untakenColor, width=1)
+    lL = line.new(_lowBar, _low, safeX2, _low, xloc=xloc.bar_index, color=untakenColor, width=1)
+    midH = math.floor((_highBar + safeX2) / 2)
+    midL = math.floor((_lowBar + safeX2) / 2)
+    labH = label.new(midH, _high + labelOffset * syminfo.mintick, str.format("{0}-H", _day),
+         xloc=xloc.bar_index, style=label.style_label_center, textcolor=textColor, color=color.new(color.white, 100), size=size.small)
+    labL = label.new(midL, _low - labelOffset * syminfo.mintick, str.format("{0}-L", _day),
+         xloc=xloc.bar_index, style=label.style_label_center, textcolor=textColor, color=color.new(color.white, 100), size=size.small)
+    array.push(highLines, lH)
+    array.push(lowLines, lL)
+    array.push(highBroken, false)
+    array.push(lowBroken, false)
+    array.push(highLabels, labH)
+    array.push(lowLabels, labL)
+
+// --- On new day ---
 if isNewDay
-    if not na(dayHigh)
-        lH = line.new(highBar, dayHigh, bar_index, dayHigh, xloc=xloc.bar_index, color=untakenColor, width=1)
-        lL = line.new(lowBar, dayLow,  bar_index, dayLow,  xloc=xloc.bar_index, color=untakenColor, width=1)
-        midH = math.floor((highBar + bar_index) / 2)
-        midL = math.floor((lowBar + bar_index) / 2)
-        labH = label.new(midH, dayHigh + labelOffset * syminfo.mintick, str.format("{0}-H", prevDay), xloc=xloc.bar_index, style=label.style_label_center, textcolor=textColor, color=color.new(color.white, 100), size=size.small)
-        labL = label.new(midL, dayLow  - labelOffset * syminfo.mintick, str.format("{0}-L", prevDay), xloc=xloc.bar_index, style=label.style_label_center, textcolor=textColor, color=color.new(color.white, 100), size=size.small)
-        array.push(highLines, lH)
-        array.push(lowLines, lL)
-        array.push(highBroken, false)
-        array.push(lowBroken, false)
-        array.push(highLabels, labH)
-        array.push(lowLabels, labL)
+    if not na(dayHigh) and not na(dayLow)
+        createDayObjects(prevDay, highBar, dayHigh, lowBar, dayLow)
     dayHigh := high
     dayLow := low
     highBar := bar_index
@@ -91,104 +101,55 @@ if low < dayLow
     dayLow := low
     lowBar := bar_index
 
-// Update lines: extend until taken; reposition label center
-for i = 0 to array.size(highLines) - 1
-    l = array.get(highLines, i)
-    broken = array.get(highBroken, i)
-    lab = array.get(highLabels, i)
-    if not broken
-        if high >= line.get_y1(l)
-            line.set_color(l, takenColor)
-            array.set(highBroken, i, true)
-        line.set_x2(l, bar_index)
-        mid = math.floor((line.get_x1(l) + line.get_x2(l)) / 2)
-        label.set_x(lab, mid)
+// --- Update lines (safe, confirmed only) ---
+if barstate.isconfirmed
+    for i = 0 to array.size(highLines) - 1
+        l = array.get(highLines, i)
+        lab = array.get(highLabels, i)
+        if not array.get(highBroken, i)
+            if high >= line.get_y1(l)
+                line.set_color(l, takenColor)
+                array.set(highBroken, i, true)
+            safeX2 = math.min(bar_index, last_bar_index)
+            line.set_x2(l, safeX2)
+            mid = math.floor((line.get_x1(l) + safeX2) / 2)
+            label.set_x(lab, mid)
 
-for i = 0 to array.size(lowLines) - 1
-    l = array.get(lowLines, i)
-    broken = array.get(lowBroken, i)
-    lab = array.get(lowLabels, i)
-    if not broken
-        if low <= line.get_y1(l)
-            line.set_color(l, takenColor)
-            array.set(lowBroken, i, true)
-        line.set_x2(l, bar_index)
-        mid = math.floor((line.get_x1(l) + line.get_x2(l)) / 2)
-        label.set_x(lab, mid)
+    for i = 0 to array.size(lowLines) - 1
+        l = array.get(lowLines, i)
+        lab = array.get(lowLabels, i)
+        if not array.get(lowBroken, i)
+            if low <= line.get_y1(l)
+                line.set_color(l, takenColor)
+                array.set(lowBroken, i, true)
+            safeX2 = math.min(bar_index, last_bar_index)
+            line.set_x2(l, safeX2)
+            mid = math.floor((line.get_x1(l) + safeX2) / 2)
+            label.set_x(lab, mid)
 
-// Ensure latest day exists
-if barstate.islast
-    if array.size(highLines) == 0 or label.get_text(array.get(highLabels, array.size(highLabels) - 1)) != currDay + "-H"
-        lH = line.new(highBar, dayHigh, bar_index, dayHigh, xloc=xloc.bar_index, color=untakenColor, width=1)
-        lL = line.new(lowBar, dayLow,  bar_index, dayLow,  xloc=xloc.bar_index, color=untakenColor, width=1)
-        midH = math.floor((highBar + bar_index) / 2)
-        midL = math.floor((lowBar + bar_index) / 2)
-        labH = label.new(midH, dayHigh + labelOffset * syminfo.mintick, str.format("{0}-H", currDay), xloc=xloc.bar_index, style=label.style_label_center, textcolor=textColor, color=color.new(color.white, 100), size=size.small)
-        labL = label.new(midL, dayLow  - labelOffset * syminfo.mintick, str.format("{0}-L", currDay), xloc=xloc.bar_index, style=label.style_label_center, textcolor=textColor, color=color.new(color.white, 100), size=size.small)
-        array.push(highLines, lH)
-        array.push(lowLines, lL)
-        array.push(highBroken, false)
-        array.push(lowBroken, false)
-        array.push(highLabels, labH)
-        array.push(lowLabels, labL)
+// --- Killzones ---
+var float kzHigh = na
+var float kzLow  = na
+var int   kzStart = na
+var box   kzBox   = na
 
-// --- Killzone persistent state (declare once)
-var float kzAHigh = na
-var float kzALow  = na
-var int   kzAStart = na
-var box   kzABox   = na
+paintSession(startH, startM, endH, endM, show, col) =>
+    inSess = show and inSession(startH, startM, endH, endM)
+    var float sHigh = na
+    var float sLow = na
+    var int   sStart = na
+    if inSess
+        sHigh := na(sHigh) ? high : math.max(sHigh, high)
+        sLow := na(sLow) ? low : math.min(sLow, low)
+        sStart := na(sStart) ? bar_index : sStart
+    else
+        if not na(sStart)
+            safeX2 = math.min(bar_index, last_bar_index)
+            box.new(sStart, sHigh, safeX2, sLow, xloc=xloc.bar_index, bgcolor=col, border_color=color.new(color.black, 80))
+        sHigh := na
+        sLow := na
+        sStart := na
 
-var float kzLHigh = na
-var float kzLLow  = na
-var int   kzLStart = na
-var box   kzLBox   = na
-
-var float kzNHigh = na
-var float kzNLow  = na
-var int   kzNStart = na
-var box   kzNBox   = na
-
-// --- Session flags
-inAsian  = showAsian  and inSession(asianStartH, asianStartM, asianEndH, asianEndM)
-inLondon = showLondon and inSession(londonStartH, londonStartM, londonEndH, londonEndM)
-inNY     = showNY and inSession(nyStartH, nyStartM, nyEndH, nyEndM)
-
-// --- Asian session inline handling
-if inAsian
-    kzAHigh := na(kzAHigh) ? high : math.max(kzAHigh, high)
-    kzALow  := na(kzALow)  ? low  : math.min(kzALow, low)
-    kzAStart := na(kzAStart) ? bar_index : kzAStart
-else
-    if not na(kzAStart)
-        // close and draw the box from kzAStart .. current bar_index
-        if not na(kzAHigh) and not na(kzALow)
-            kzABox := box.new(kzAStart, kzAHigh, bar_index, kzALow, xloc=xloc.bar_index, bgcolor=asianColor, border_color=color.new(color.black, 80))
-        kzAHigh := na
-        kzALow := na
-        kzAStart := na
-
-// --- London session inline handling
-if inLondon
-    kzLHigh := na(kzLHigh) ? high : math.max(kzLHigh, high)
-    kzLLow  := na(kzLLow)  ? low  : math.min(kzLLow, low)
-    kzLStart := na(kzLStart) ? bar_index : kzLStart
-else
-    if not na(kzLStart)
-        if not na(kzLHigh) and not na(kzLLow)
-            kzLBox := box.new(kzLStart, kzLHigh, bar_index, kzLLow, xloc=xloc.bar_index, bgcolor=londonColor, border_color=color.new(color.black, 80))
-        kzLHigh := na
-        kzLLow := na
-        kzLStart := na
-
-// --- NY session inline handling
-if inNY
-    kzNHigh := na(kzNHigh) ? high : math.max(kzNHigh, high)
-    kzNLow  := na(kzNLow)  ? low  : math.min(kzNLow, low)
-    kzNStart := na(kzNStart) ? bar_index : kzNStart
-else
-    if not na(kzNStart)
-        if not na(kzNHigh) and not na(kzNLow)
-            kzNBox := box.new(kzNStart, kzNHigh, bar_index, kzNLow, xloc=xloc.bar_index, bgcolor=nyColor, border_color=color.new(color.black, 80))
-        kzNHigh := na
-        kzNLow := na
-        kzNStart := na
+paintSession(asianStartH, asianStartM, asianEndH, asianEndM, showAsian, asianColor)
+paintSession(londonStartH, londonStartM, londonEndH, londonEndM, showLondon, londonColor)
+paintSession(nyStartH, nyStartM, nyEndH, nyEndM, showNY, nyColor)
